@@ -9,6 +9,8 @@
 # Senha inicial do app: 2468. Mantenha a logo pressionada para abrir o estúdio.
 # APK demonstrativo ARM 32 e 64 bits; conserva os avisos de simulação.
 # Usa assinatura de teste. Uma nova execução pode exigir desinstalar a versão anterior.
+# Revisão Android: ferramentas oficiais 12.0 fixadas, compatíveis com Java 17.
+# Não usa android-actions/setup-android nem solicita o pacote legado tools.
 # Validado: sintaxe do YAML e restauração do código embutido.
 # Pendente: execução do Flutter/build e teste do APK em aparelho.
 # Referências: https://docs.flutter.dev/deployment/android
@@ -34,8 +36,35 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Preparar Android
-        uses: android-actions/setup-android@v3
+      - name: Preparar Android com ferramentas fixas
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunny_sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$RUNNER_TEMP/android-sdk}}"
+          bunny_tools_dir="$RUNNER_TEMP/bunny-cmdline-tools-12"
+          mkdir -p "$bunny_sdk_root" "$bunny_tools_dir"
+          curl --fail --location --retry 3 --connect-timeout 30 \
+            --output "$bunny_tools_dir/tools.zip" \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q "$bunny_tools_dir/tools.zip" -d "$bunny_tools_dir"
+          bunny_sdkmanager="$bunny_tools_dir/cmdline-tools/bin/sdkmanager"
+          "$bunny_sdkmanager" --version
+          echo "ANDROID_HOME=$bunny_sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$bunny_sdk_root" >> "$GITHUB_ENV"
+          echo "BUNNY_SDKMANAGER=$bunny_sdkmanager" >> "$GITHUB_ENV"
+          echo "$bunny_tools_dir/cmdline-tools/bin" >> "$GITHUB_PATH"
+          # yes pode terminar com SIGPIPE; verificar o resultado do sdkmanager.
+          set +o pipefail
+          yes | "$bunny_sdkmanager" --sdk_root="$bunny_sdk_root" --licenses > "$RUNNER_TEMP/bunny-licenses.log" 2>&1
+          bunny_license_result=${PIPESTATUS[1]}
+          set -o pipefail
+          if [[ "$bunny_license_result" -ne 0 ]]; then
+            cat "$RUNNER_TEMP/bunny-licenses.log"
+            exit "$bunny_license_result"
+          fi
+          "$bunny_sdkmanager" --sdk_root="$bunny_sdk_root" \
+            'platform-tools' 'platforms;android-34' 'platforms;android-35' \
+            'build-tools;34.0.0' 'build-tools;35.0.0'
       - name: Preparar Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -1901,7 +1930,6 @@ jobs:
           set -euo pipefail
           cd "$BUNNY_PROJECT_DIR"
           flutter config --no-analytics
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
           bash scripts/build-apk.sh
       - name: Verificar assinatura e preparar download
         shell: bash
